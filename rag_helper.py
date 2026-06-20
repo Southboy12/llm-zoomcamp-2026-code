@@ -1,0 +1,93 @@
+from ingest import load_faq_data, build_index
+
+documents = load_faq_data()
+index = build_index(documents)
+
+
+INSTRUCTIONS = r'''
+Your task is to answer questions from the course participants based on the provided context.
+
+Use the context to find information and provide accurate answers. If the answer is not found in the context, respond with "I don't know"
+'''
+
+USER_PROMPT_TEMPLATE = '''
+Question:
+{question}
+
+Context:
+{context}
+'''
+
+
+
+class RAGBase:
+
+    def __init__(
+        self,
+        index,
+        client,
+        instructions=INSTRUCTIONS,
+        prompt_template=USER_PROMPT_TEMPLATE,
+        course="llm-zoomcamp",
+        model="deepseek-v4-flash"
+    ):
+        self.index = index
+        self.client = client
+        self.instructions = instructions
+        self.course = course
+        self.prompt_template = prompt_template
+        self.model = model
+
+
+    def search(self, query, num_results=5):
+        boost_dict = {'question': 3.0, 'section': 0.5}
+        filter_dict = {'course': self.course}
+
+        return self.index.search(
+            query,
+            boost_dict=boost_dict,
+            filter_dict=filter_dict,
+            num_results=num_results
+        )
+
+
+    def build_context(self, search_results):
+        lines = []
+
+        for doc in search_results:
+            lines.append(doc['section'])
+            lines.append('Q: ' + doc['question'])
+            lines.append('A: ' + doc['answer'])
+            lines.append('')
+
+        return '\n'.join(lines).strip()
+
+
+    def build_prompt(self, query, search_results):
+        context = self.build_context(search_results)
+        prompt = self.prompt_template.format(
+            question=query,
+            context=context
+        )
+
+        return prompt.strip()
+
+
+    def llm(self, prompt):
+        input_message = [
+            {'role': 'system', 'content': self.instructions},
+            {'role': 'user', 'content': prompt}
+        ]
+
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=input_message
+        )
+
+        return response.choices[0].message.content
+
+    def rag(self, query):
+        search_results = self.search(query)
+        prompt = self.build_prompt(query, search_results)
+        answer = self.llm(prompt)
+        return answer
